@@ -25,13 +25,13 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 
 # -------------------------------
-# Twitter Credentials (Hardcoded for MVP)
+# Twitter Credentials (Updated Hardcoded)
 # -------------------------------
-bearer_token = "AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAAbqBNVGht3tX%2BrGy2e9RbbV3JGR4%3D9LMq0xbSRSpZXx4TAZVM6TNT929uHjtPKugqZM2x7xcJyorprH"
-consumer_key = "nzJ3aJBXeEpv0Mvw1seDEcR6f"
-consumer_secret = "s9SLYMpZgOCSnYYYSNrKB72e8PtobZ7zwYcIgK0H0RcoY8WLzb"
-oauth_token = "1760306826262794242-TZkQ1MLE0Xq0d68QxkzUCQTjLawzJZ"
-oauth_token_secret = "zGymxO7vqRCr1upYs4kO10keUkxwTSOvZlFofNsxwPktY"
+bearer_token = "AAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAAeA2XC2Sr0T08tk0Y5ZcXfwedwK8%3D9fgXU3xWrQGTJGZAAzzUalV1ePOFFAa4JWllkZl3T5eYA6bKCS"
+consumer_key = "CKkhTfjQEmP20GYFlF3gVwe98"
+consumer_secret = "8TPzOOxB2eEui28pO6u1pXthlUBNd4wpspQsSAEvHgEQkb7tsR"
+oauth_token = "1760306826262794242-Id0C3xho2pl4h9k5aJg1knb3wt3kkh"
+oauth_token_secret = "d2dPP8LzBj3ar6bYH7abDfocwmr7zA9a57lDXZuoveXE1"
 
 # -------------------------------
 # NLP Model & Concepts
@@ -47,8 +47,9 @@ def bearer_oauth(r):
     r.headers["User-Agent"] = "v2RecentSearchPython"
     return r
 
-def fetch_tweets(query, max_results=10):
-    logging.info(f"Fetching tweets for query: '{query}'")
+def fetch_tweets(query):
+    max_results = 15  # Fixed number of posts
+    logging.info(f"Fetching {max_results} tweets for query: '{query}'")
     url = "https://api.x.com/2/tweets/search/recent"
     params = {
         "query": query,
@@ -121,11 +122,10 @@ def generate_followup(tweet_text, engagement_data):
 st.title("EngageFlow: Social Media Networking Dashboard")
 
 query_input = st.text_input("Search Query or @username", "@twitterdev")
-max_results = st.slider("Max Results", 1, 20, 5)
 
 # --- 1️⃣ Fetch Tweets ---
 if st.button("Fetch Tweets"):
-    st.session_state['tweets'] = fetch_tweets(query_input, max_results)
+    st.session_state['tweets'] = fetch_tweets(query_input)
     logging.info("Fetch Tweets button clicked")
 
 tweets = st.session_state.get('tweets', [])
