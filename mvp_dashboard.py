@@ -6,6 +6,16 @@ import requests
 from requests_oauthlib import OAuth1Session
 from huggingface_hub import InferenceClient
 import pandas as pd
+import logging
+
+# -------------------------------
+# Logging Setup
+# -------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s]: %(message)s',
+    handlers=[logging.FileHandler("engageflow.log"), logging.StreamHandler()]
+)
 
 # -------------------------------
 # Load environment variables
@@ -14,6 +24,7 @@ load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
 if not HF_TOKEN:
     st.error("HF_TOKEN not found in .env file!")
+    logging.error("HF_TOKEN not found in .env file!")
 
 # -------------------------------
 # Twitter API Credentials (Hardcoded for MVP)
@@ -30,7 +41,6 @@ oauth_token_secret = "dKqswOOJMEkj0RZ1mhlV4K4iVUAp42oiQRQHvUaDhAB4S"
 hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 nlp_model = "HuggingFaceTB/SmolLM3-3B"
 
-# Predefined topics/concepts
 concepts = ["investment", "crypto", "commodities", "forex", "market analysis"]
 
 # -------------------------------
@@ -42,6 +52,7 @@ def bearer_oauth(r):
     return r
 
 def fetch_tweets(query, max_results=10):
+    logging.info(f"Fetching tweets for query: '{query}' with max_results={max_results}")
     search_url = "https://api.twitter.com/2/tweets/search/recent"
     params = {
         "query": query,
@@ -50,11 +61,15 @@ def fetch_tweets(query, max_results=10):
     }
     response = requests.get(search_url, auth=bearer_oauth, params=params)
     if response.status_code != 200:
+        logging.error(f"Error fetching tweets: {response.status_code} {response.text}")
         st.error(f"Error fetching tweets: {response.status_code} {response.text}")
         return []
-    return response.json().get("data", [])
+    tweets = response.json().get("data", [])
+    logging.info(f"Fetched {len(tweets)} tweets successfully")
+    return tweets
 
 def post_reply(text, tweet_id):
+    logging.info(f"Posting reply to tweet_id={tweet_id}")
     oauth = OAuth1Session(
         consumer_key,
         client_secret=consumer_secret,
@@ -63,41 +78,58 @@ def post_reply(text, tweet_id):
     )
     payload = {"text": text, "in_reply_to_tweet_id": tweet_id}
     response = oauth.post("https://api.twitter.com/2/tweets", json=payload)
+    if response.status_code == 201:
+        logging.info(f"Reply posted successfully to tweet_id={tweet_id}")
+    else:
+        logging.error(f"Failed to post reply: {response.status_code} {response.text}")
     return response.status_code, response.json()
 
 def fetch_metrics(tweet_id):
+    logging.info(f"Fetching metrics for tweet_id={tweet_id}")
     url = f"https://api.twitter.com/2/tweets/{tweet_id}?tweet.fields=public_metrics"
     response = requests.get(url, auth=bearer_oauth)
     if response.status_code != 200:
+        logging.error(f"Error fetching metrics for tweet_id={tweet_id}: {response.status_code}")
         return None
-    return response.json().get("data", {}).get("public_metrics", {})
+    metrics = response.json().get("data", {}).get("public_metrics", {})
+    logging.info(f"Metrics for tweet_id={tweet_id}: {metrics}")
+    return metrics
 
 # -------------------------------
 # NLP Functions
 # -------------------------------
 def detect_topic(tweet_text):
+    logging.info(f"Detecting topic for tweet: {tweet_text[:50]}...")
     prompt = f"Classify this tweet into topics: {concepts}. Tweet: {tweet_text}"
     completion = hf_client.chat.completions.create(
         model=nlp_model,
         messages=[{"role": "user", "content": prompt}]
     )
-    return completion.choices[0].message
+    topic = completion.choices[0].message
+    logging.info(f"Detected topic: {topic}")
+    return topic
 
 def generate_comment(tweet_text, topic):
+    logging.info(f"Generating comment for topic '{topic}'")
     prompt = f"Generate 3 professional comment options for this tweet based on topic '{topic}': {tweet_text}"
     completion = hf_client.chat.completions.create(
         model=nlp_model,
         messages=[{"role": "user", "content": prompt}]
     )
-    return completion.choices[0].message
+    comments = completion.choices[0].message
+    logging.info(f"Generated comments: {comments[:50]}...")
+    return comments
 
 def generate_followup(tweet_text, engagement_data):
+    logging.info(f"Generating follow-up for tweet based on engagement {engagement_data}")
     prompt = f"Based on engagement {engagement_data}, generate a follow-up reply or DM for the tweet: {tweet_text}"
     completion = hf_client.chat.completions.create(
         model=nlp_model,
         messages=[{"role": "user", "content": prompt}]
     )
-    return completion.choices[0].message
+    followup = completion.choices[0].message
+    logging.info(f"Generated follow-up: {followup[:50]}...")
+    return followup
 
 # -------------------------------
 # Streamlit App
