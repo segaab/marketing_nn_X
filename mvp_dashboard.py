@@ -1,24 +1,33 @@
 # streamlit_dashboard.py
 import streamlit as st
 import os
+from dotenv import load_dotenv
 import requests
 from requests_oauthlib import OAuth1Session
 from huggingface_hub import InferenceClient
 import pandas as pd
-import time
 
 # -------------------------------
-# Environment / API Setup
+# Load environment variables
 # -------------------------------
-# Twitter API credentials
-bearer_token = os.environ.get("BEARER_TOKEN")
-consumer_key = os.environ.get("CONSUMER_KEY")
-consumer_secret = os.environ.get("CONSUMER_SECRET")
-oauth_token = os.environ.get("OAUTH_TOKEN")           # after OAuth flow
-oauth_token_secret = os.environ.get("OAUTH_TOKEN_SECRET") # after OAuth flow
+load_dotenv()
+HF_TOKEN = os.getenv("HF_TOKEN")
+if not HF_TOKEN:
+    st.error("HF_TOKEN not found in .env file!")
 
-# Hugging Face Inference API
-hf_client = InferenceClient(provider="hf-inference", api_key=os.environ.get("HF_TOKEN"))
+# -------------------------------
+# Twitter API Credentials (Hardcoded for MVP)
+# -------------------------------
+bearer_token = "AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAACbuBHpkCKh5FNKW1xXLPdBZAmk4%3DogmOnHyhqONUWNhrEitUZgXpFYUliPZgmEUcmi8jv99FlV0A1u"
+consumer_key = "1760306826262794242-TpU2JlTTm095iz0E5uzGffjmBt60yk"
+consumer_secret = "etApPK2m0rhbTaVwiFcf1XPkjV4oFbgY8TmHf3zwvAzol"
+oauth_token = "1760306826262794242-rGqTedDjHT8Qr7D7UTKxPSL0OoKNVU"
+oauth_token_secret = "dKqswOOJMEkj0RZ1mhlV4K4iVUAp42oiQRQHvUaDhAB4S"
+
+# -------------------------------
+# Hugging Face Client
+# -------------------------------
+hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 nlp_model = "HuggingFaceTB/SmolLM3-3B"
 
 # Predefined topics/concepts
@@ -34,14 +43,14 @@ def bearer_oauth(r):
 
 def fetch_tweets(query, max_results=10):
     search_url = "https://api.twitter.com/2/tweets/search/recent"
-    query_params = {
-        'query': query,
-        'max_results': max_results,
-        'tweet.fields': 'author_id,created_at,public_metrics'
+    params = {
+        "query": query,
+        "max_results": max_results,
+        "tweet.fields": "author_id,created_at,public_metrics"
     }
-    response = requests.get(search_url, auth=bearer_oauth, params=query_params)
+    response = requests.get(search_url, auth=bearer_oauth, params=params)
     if response.status_code != 200:
-        st.error(f"Error fetching tweets: {response.status_code}")
+        st.error(f"Error fetching tweets: {response.status_code} {response.text}")
         return []
     return response.json().get("data", [])
 
@@ -67,7 +76,7 @@ def fetch_metrics(tweet_id):
 # NLP Functions
 # -------------------------------
 def detect_topic(tweet_text):
-    prompt = f"Classify this tweet into the following topics: {concepts}. Tweet: {tweet_text}"
+    prompt = f"Classify this tweet into topics: {concepts}. Tweet: {tweet_text}"
     completion = hf_client.chat.completions.create(
         model=nlp_model,
         messages=[{"role": "user", "content": prompt}]
@@ -93,8 +102,8 @@ def generate_followup(tweet_text, engagement_data):
 # -------------------------------
 # Streamlit App
 # -------------------------------
-st.set_page_config(page_title="Social Media Networking Dashboard", layout="wide")
-st.title("Social Media Networking Dashboard")
+st.set_page_config(page_title="EngageFlow Dashboard", layout="wide")
+st.title("EngageFlow: Social Media Networking Dashboard")
 
 # --- Sidebar ---
 st.sidebar.header("Fetch Tweets")
@@ -141,7 +150,7 @@ if fetch_button:
             if status == 201:
                 st.success("Reply posted successfully!")
             else:
-                st.error(f"Error posting reply: {status}")
+                st.error(f"Error posting reply: {status} {response}")
         
         # --- Monitor Engagement ---
         st.subheader("Monitor Engagement")
