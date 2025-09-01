@@ -1,4 +1,4 @@
-# streamlit_dashboard_debug.py
+# streamlit_dashboard_debug_full.py
 import streamlit as st
 import os
 from dotenv import load_dotenv
@@ -47,6 +47,7 @@ def bearer_oauth(r):
     r.headers["User-Agent"] = "v2RecentSearchPython"
     return r
 
+@st.cache_data(ttl=900)  # cache for 15 minutes
 def fetch_tweets(query, max_results=10):
     logging.info(f"Fetching tweets for query: '{query}'")
     url = "https://api.twitter.com/2/tweets/search/recent"
@@ -56,9 +57,12 @@ def fetch_tweets(query, max_results=10):
         "tweet.fields": "author_id,created_at,public_metrics"
     }
     response = requests.get(url, auth=bearer_oauth, params=params)
+    
+    # Logging
     logging.info(f"Twitter API status: {response.status_code}")
-    logging.info(f"Response content: {response.text[:300]}")  # truncated for log
-
+    logging.info(f"Response content (truncated): {response.text[:300]}")
+    logging.info(f"Rate Limit - Limit: {response.headers.get('x-rate-limit-limit')}, Remaining: {response.headers.get('x-rate-limit-remaining')}, Reset: {response.headers.get('x-rate-limit-reset')}")
+    
     if response.status_code != 200:
         logging.error(f"Error fetching tweets: {response.status_code} {response.text}")
         st.error(f"Error fetching tweets: {response.status_code}")
@@ -134,14 +138,19 @@ def generate_followup(tweet_text, engagement_data):
 st.title("EngageFlow: Social Media Networking Dashboard")
 
 query_input = st.text_input("Search Query or @username", "@twitterdev")
-max_results = st.slider("Max Results", 1, 20, 5)
+max_results = st.slider("Max Results", 1, 20, 5)  # min 1 for testing
+
+# Initialize session state for tweets
+if 'tweets' not in st.session_state:
+    st.session_state['tweets'] = []
 
 # --- 1️⃣ Fetch Tweets ---
 if st.button("Fetch Tweets"):
-    fetched = fetch_tweets(query_input, max_results)
-    st.session_state['tweets'] = fetched
-    logging.info("Fetch Tweets button clicked")
-    st.write("Raw fetched tweets:", fetched)
+    if not st.session_state['tweets']:
+        st.session_state['tweets'] = fetch_tweets(query_input, max_results)
+    else:
+        st.info("Tweets already fetched. Use Refresh or new query.")
+    st.write("Raw fetched tweets:", st.session_state['tweets'])
 
 tweets = st.session_state.get('tweets', [])
 
@@ -155,7 +164,6 @@ if tweets:
         for t in tweets:
             t['topic'] = detect_topic(t['text'])
         st.session_state['tweets'] = tweets
-        logging.info("Detect Topic button clicked")
         st.success("Topics detected for all tweets")
         st.write("Tweets with topics:", tweets)
 
@@ -168,7 +176,6 @@ if tweets:
             selected_tweet['text'], selected_tweet.get('topic', 'General')
         )
         st.session_state['tweets'] = tweets
-        logging.info(f"Generate Comment button clicked for tweet_id={selected_tweet_id}")
         st.text_area("Suggested Comments", value=selected_tweet['suggested_comments'], height=100)
 
     # --- 4️⃣ Post Reply ---
@@ -184,14 +191,12 @@ if tweets:
     if st.button("Refresh Metrics"):
         metrics = fetch_metrics(selected_tweet_id)
         st.json(metrics)
-        logging.info(f"Refresh Metrics button clicked for tweet_id={selected_tweet_id}")
 
     # --- 6️⃣ Generate Follow-Up ---
     if st.button("Generate Follow-Up"):
         engagement_data = fetch_metrics(selected_tweet_id)
         followup_text = generate_followup(reply_text, engagement_data)
         st.text_area("Suggested Follow-Up", value=followup_text, height=100)
-        logging.info(f"Generate Follow-Up button clicked for tweet_id={selected_tweet_id}")
 
 else:
     st.info("No tweets fetched yet. Press 'Fetch Tweets' to begin.")
