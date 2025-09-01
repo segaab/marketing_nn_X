@@ -1,4 +1,4 @@
-# streamlit_dashboard_three_requests.py
+# streamlit_dashboard.py
 import streamlit as st
 import os
 from dotenv import load_dotenv
@@ -6,26 +6,17 @@ import requests
 from requests_oauthlib import OAuth1Session
 from huggingface_hub import InferenceClient
 import pandas as pd
-import logging
-
-# -------------------------------
-# Logging Setup
-# -------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s]: %(message)s",
-    handlers=[logging.FileHandler("engageflow.log"), logging.StreamHandler()],
-)
 
 # -------------------------------
 # Load environment variables
 # -------------------------------
 load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
-hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
+if not HF_TOKEN:
+    st.error("HF_TOKEN not found in .env file!")
 
 # -------------------------------
-# Twitter Credentials
+# Twitter API Credentials (Hardcoded for MVP)
 # -------------------------------
 bearer_token = "AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAACbuBHpkCKh5FNKW1xXLPdBZAmk4%3DogmOnHyhqONUWNhrEitUZgXpFYUliPZgmEUcmi8jv99FlV0A1u"
 consumer_key = "1760306826262794242-TpU2JlTTm095iz0E5uzGffjmBt60yk"
@@ -34,69 +25,65 @@ oauth_token = "1760306826262794242-rGqTedDjHT8Qr7D7UTKxPSL0OoKNVU"
 oauth_token_secret = "dKqswOOJMEkj0RZ1mhlV4K4iVUAp42oiQRQHvUaDhAB4S"
 
 # -------------------------------
-# Helper Functions
+# Hugging Face Client
 # -------------------------------
-def log_response(response):
-    logging.info(f"Status: {response.status_code}")
-    logging.info(f"Headers: {response.headers}")
-    logging.info(f"Body: {response.text[:400]}")  # preview first 400 chars
-
-def fetch_tweets_format1(query, max_results):
-    """Format 1: Standard params dict"""
-    url = "https://api.x.com/2/tweets/search/recent"
-    params = {"query": query, "max_results": max_results, "tweet.fields": "author_id,created_at,text"}
-    headers = {"Authorization": f"Bearer {bearer_token}"}
-    response = requests.get(url, headers=headers, params=params)
-    log_response(response)
-    return response.json().get("data", [])
-
-def fetch_tweets_format2(query, max_results):
-    """Format 2: Inline URL params"""
-    url = f"https://api.x.com/2/tweets/search/recent?query={query}&max_results={max_results}&tweet.fields=author_id,created_at,text"
-    headers = {"Authorization": f"Bearer {bearer_token}"}
-    response = requests.get(url, headers=headers)
-    log_response(response)
-    return response.json().get("data", [])
-
-def fetch_tweets_format3(query, max_results):
-    """Format 3: Minimal request, only query + max_results"""
-    url = "https://api.x.com/2/tweets/search/recent"
-    params = {"query": query, "max_results": max_results}
-    headers = {"Authorization": f"Bearer {bearer_token}"}
-    response = requests.get(url, headers=headers, params=params)
-    log_response(response)
-    return response.json().get("data", [])
+hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
+nlp_model = "HuggingFaceTB/SmolLM3-3B"
 
 # -------------------------------
-# Streamlit UI
+# Twitter Functions
 # -------------------------------
-st.title("EngageFlow: Fetch Tweets Test (Three Formats)")
+def fetch_tweets(query, max_results=10):
+    """
+    Fetch recent tweets using the updated X API (api.x.com).
+    """
+    search_url = "https://api.x.com/2/tweets/search/recent"
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+    params = {
+        "query": query,
+        "max_results": max_results,
+        "tweet.fields": "id,text,author_id,created_at,public_metrics"
+    }
 
-query_input = st.text_input("Search Query or @username", "@TwitterDev -is:retweet")
-max_results = st.slider("Max Results", 10, 100, 10)  # Free tier requires min 10
+    response = requests.get(search_url, headers=headers, params=params)
 
-# Session state for storing results
-if "tweets" not in st.session_state:
-    st.session_state["tweets"] = []
+    if response.status_code != 200:
+        st.error(f"❌ Error fetching tweets: {response.status_code} {response.text}")
+        return []
+    
+    return response.json().get("data", [])
 
-# --- Request Format 1 ---
-if st.button("Fetch Tweets (Format 1 - Standard)"):
-    st.session_state["tweets"] = fetch_tweets_format1(query_input, max_results)
-    st.success(f"Fetched {len(st.session_state['tweets'])} tweets (Format 1)")
 
-# --- Request Format 2 ---
-if st.button("Fetch Tweets (Format 2 - Inline URL)"):
-    st.session_state["tweets"] = fetch_tweets_format2(query_input, max_results)
-    st.success(f"Fetched {len(st.session_state['tweets'])} tweets (Format 2)")
+def post_reply(text, tweet_id):
+    """
+    Reply to a tweet using OAuth1Session.
+    """
+    oauth = OAuth1Session(
+        client_key=consumer_key,
+        client_secret=consumer_secret,
+        resource_owner_key=oauth_token,
+        resource_owner_secret=oauth_token_secret
+    )
+    payload = {"text": text, "in_reply_to_tweet_id": tweet_id}
+    response = oauth.post("https://api.x.com/2/tweets", json=payload)
+    return response.status_code, response.json()
 
-# --- Request Format 3 ---
-if st.button("Fetch Tweets (Format 3 - Minimal)"):
-    st.session_state["tweets"] = fetch_tweets_format3(query_input, max_results)
-    st.success(f"Fetched {len(st.session_state['tweets'])} tweets (Format 3)")
+# -------------------------------
+# NLP Functions
+# -------------------------------
+def detect_topic(tweet_text):
+    prompt = f"Classify this tweet into topics: investment, crypto, commodities, forex, market analysis. Tweet: {tweet_text}"
+    completion = hf_client.chat.completions.create(
+        model=nlp_model,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return completion.choices[0].message
 
-# Display tweets if available
-tweets = st.session_state.get("tweets", [])
-if tweets:
-    st.subheader("Fetched Tweets")
-    df = pd.DataFrame([{"Tweet ID": t["id"], "Text": t["text"]} for t in tweets])
-    st.dataframe(df)
+
+def generate_comment(tweet_text, topic):
+    prompt = f"Generate 3 professional comment options for this tweet based on topic '{topic}': {tweet_text}"
+    completion = hf_client.chat.completions.create(
+        model=nlp_model,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return completion.choices[0].message
