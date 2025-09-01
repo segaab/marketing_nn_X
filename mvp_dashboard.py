@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 
 # -------------------------------
-# Load environment variables
+# Load environment variables (HF Token only)
 # -------------------------------
 load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -27,11 +27,11 @@ hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 # -------------------------------
 # Twitter Credentials (Hardcoded for MVP)
 # -------------------------------
-bearer_token = "AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAACbuBHpkCKh5FNKW1xXLPdBZAmk4%3DogmOnHyhqONUWNhrEitUZgXpFYUliPZgmEUcmi8jv99FlV0A1u"
-consumer_key = "1760306826262794242-TpU2JlTTm095iz0E5uzGffjmBt60yk"
-consumer_secret = "etApPK2m0rhbTaVwiFcf1XPkjV4oFbgY8TmHf3zwvAzol"
-oauth_token = "1760306826262794242-rGqTedDjHT8Qr7D7UTKxPSL0OoKNVU"
-oauth_token_secret = "dKqswOOJMEkj0RZ1mhlV4K4iVUAp42oiQRQHvUaDhAB4S"
+bearer_token = "AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAAbqBNVGht3tX%2BrGy2e9RbbV3JGR4%3D9LMq0xbSRSpZXx4TAZVM6TNT929uHjtPKugqZM2x7xcJyorprH"
+consumer_key = "nzJ3aJBXeEpv0Mvw1seDEcR6f"
+consumer_secret = "s9SLYMpZgOCSnYYYSNrKB72e8PtobZ7zwYcIgK0H0RcoY8WLzb"
+oauth_token = "1760306826262794242-TZkQ1MLE0Xq0d68QxkzUCQTjLawzJZ"
+oauth_token_secret = "zGymxO7vqRCr1upYs4kO10keUkxwTSOvZlFofNsxwPktY"
 
 # -------------------------------
 # NLP Model & Concepts
