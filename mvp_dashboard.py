@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 
 # Environment variables
-BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
+BEARER_TOKEN = AAAAAAAAAAAAAAAAAAAAALW%2F3gEAAAAACbuBHpkCKh5FNKW1xXLPdBZAmk4%3DogmOnHyhqONUWNhrEitUZgXpFYUliPZgmEUcmi8jv99FlV0A1u"
 HF_API_KEY = os.getenv("HF_API_KEY")
 
 # =============================
