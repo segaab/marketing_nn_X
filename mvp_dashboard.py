@@ -40,7 +40,6 @@ oauth_token_secret = "dKqswOOJMEkj0RZ1mhlV4K4iVUAp42oiQRQHvUaDhAB4S"
 # -------------------------------
 hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 nlp_model = "HuggingFaceTB/SmolLM3-3B"
-
 concepts = ["investment", "crypto", "commodities", "forex", "market analysis"]
 
 # -------------------------------
@@ -52,7 +51,7 @@ def bearer_oauth(r):
     return r
 
 def fetch_tweets(query, max_results=10):
-    logging.info(f"Fetching tweets for query: '{query}' with max_results={max_results}")
+    logging.info(f"Fetching tweets for query: '{query}'")
     search_url = "https://api.twitter.com/2/tweets/search/recent"
     params = {
         "query": query,
@@ -138,60 +137,75 @@ st.set_page_config(page_title="EngageFlow Dashboard", layout="wide")
 st.title("EngageFlow: Social Media Networking Dashboard")
 
 # --- Sidebar ---
-st.sidebar.header("Fetch Tweets")
+st.sidebar.header("Workflow Steps")
 query_input = st.sidebar.text_input("Search Query or @username", "@twitterdev")
 max_results = st.sidebar.slider("Max Results", 5, 20, 10)
-fetch_button = st.sidebar.button("Fetch Tweets")
 
-# --- Main Workflow ---
-if fetch_button:
-    st.info("Fetching tweets...")
-    tweets = fetch_tweets(query_input, max_results)
-    
-    if tweets:
-        tweet_data = []
-        for tweet in tweets:
-            tweet_id = tweet['id']
-            text = tweet['text']
-            metrics = tweet.get('public_metrics', {})
-            topic = detect_topic(text)
-            suggested_comments = generate_comment(text, topic)
-            
-            tweet_data.append({
-                "Tweet ID": tweet_id,
-                "Text": text,
-                "Topic": topic,
-                "Suggested Comments": suggested_comments,
-                "Likes": metrics.get("like_count", 0),
-                "Retweets": metrics.get("retweet_count", 0),
-                "Replies": metrics.get("reply_count", 0)
-            })
-        
-        df = pd.DataFrame(tweet_data)
-        st.subheader("Fetched Tweets & NLP Analysis")
-        st.dataframe(df)
-        
-        # --- Select tweet to reply ---
-        selected_tweet_id = st.selectbox("Select Tweet to Reply", df["Tweet ID"])
-        selected_comments = df[df["Tweet ID"]==selected_tweet_id]["Suggested Comments"].values[0]
-        st.text_area("Suggested Comments", value=selected_comments, height=100)
-        reply_text = st.text_area("Edit / Write Your Comment Here", height=100)
-        
-        if st.button("Post Reply"):
-            status, response = post_reply(reply_text, selected_tweet_id)
-            if status == 201:
-                st.success("Reply posted successfully!")
-            else:
-                st.error(f"Error posting reply: {status} {response}")
-        
-        # --- Monitor Engagement ---
-        st.subheader("Monitor Engagement")
-        if st.button("Refresh Metrics"):
-            updated_metrics = fetch_metrics(selected_tweet_id)
-            st.json(updated_metrics)
-        
-        # --- Generate Follow-Up ---
-        if st.button("Generate Follow-Up"):
-            engagement_data = fetch_metrics(selected_tweet_id)
-            followup_text = generate_followup(reply_text, engagement_data)
-            st.text_area("Suggested Follow-Up", value=followup_text, height=100)
+# -------------------------------
+# 1️⃣ Fetch Tweets
+# -------------------------------
+if st.sidebar.button("Fetch Tweets"):
+    st.session_state['tweets'] = fetch_tweets(query_input, max_results)
+    logging.info("Fetch Tweets button clicked")
+
+tweets = st.session_state.get('tweets', [])
+
+if tweets:
+    df = pd.DataFrame([{
+        "Tweet ID": t['id'],
+        "Text": t['text'],
+        "Likes": t['public_metrics'].get('like_count', 0),
+        "Retweets": t['public_metrics'].get('retweet_count', 0),
+        "Replies": t['public_metrics'].get('reply_count', 0)
+    } for t in tweets])
+    st.subheader("Fetched Tweets")
+    st.dataframe(df)
+
+    # -------------------------------
+    # 2️⃣ Detect Topic
+    # -------------------------------
+    if st.button("Detect Topic"):
+        for t in tweets:
+            t['topic'] = detect_topic(t['text'])
+        logging.info("Detect Topic button clicked")
+        st.success("Topics detected for all tweets")
+        st.dataframe(pd.DataFrame(tweets))
+
+    # -------------------------------
+    # 3️⃣ Generate Comment
+    # -------------------------------
+    selected_tweet_id = st.selectbox("Select Tweet to Comment", [t['id'] for t in tweets])
+    selected_tweet = next((t for t in tweets if t['id']==selected_tweet_id), None)
+
+    if selected_tweet and st.button("Generate Comment"):
+        selected_tweet['suggested_comments'] = generate_comment(selected_tweet['text'], selected_tweet.get('topic', 'General'))
+        logging.info(f"Generate Comment button clicked for tweet_id={selected_tweet_id}")
+        st.text_area("Suggested Comments", value=selected_tweet['suggested_comments'], height=100)
+
+    # -------------------------------
+    # 4️⃣ Post Reply
+    # -------------------------------
+    reply_text = st.text_area("Edit / Write Your Comment Here", height=100)
+    if st.button("Post Reply"):
+        status, response = post_reply(reply_text, selected_tweet_id)
+        if status == 201:
+            st.success("Reply posted successfully!")
+        else:
+            st.error(f"Error posting reply: {status} {response}")
+
+    # -------------------------------
+    # 5️⃣ Refresh Metrics
+    # -------------------------------
+    if st.button("Refresh Metrics"):
+        metrics = fetch_metrics(selected_tweet_id)
+        st.json(metrics)
+        logging.info(f"Refresh Metrics button clicked for tweet_id={selected_tweet_id}")
+
+    # -------------------------------
+    # 6️⃣ Generate Follow-Up
+    # -------------------------------
+    if st.button("Generate Follow-Up"):
+        engagement_data = fetch_metrics(selected_tweet_id)
+        followup_text = generate_followup(reply_text, engagement_data)
+        st.text_area("Suggested Follow-Up", value=followup_text, height=100)
+        logging.info(f"Generate Follow-Up button clicked for tweet_id={selected_tweet_id}")
