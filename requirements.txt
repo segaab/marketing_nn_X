@@ -1,1 +1,5 @@
-r
+huggingface_hub
+requests_oauthlib
+streamlit
+pandas
+requests
