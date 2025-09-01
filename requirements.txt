@@ -3,3 +3,4 @@ requests_oauthlib
 streamlit
 pandas
 requests
+dotenv
