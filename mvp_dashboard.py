@@ -1,4 +1,4 @@
-# streamlit_dashboard_debug_full.py
+# streamlit_dashboard_free_tier.py
 import streamlit as st
 import os
 from dotenv import load_dotenv
@@ -49,7 +49,7 @@ def bearer_oauth(r):
 
 @st.cache_data(ttl=900)  # cache for 15 minutes
 def fetch_tweets(query, max_results=10):
-    logging.info(f"Fetching tweets for query: '{query}'")
+    logging.info(f"Fetching tweets for query: '{query}' with max_results={max_results}")
     url = "https://api.twitter.com/2/tweets/search/recent"
     params = {
         "query": query,
@@ -137,8 +137,8 @@ def generate_followup(tweet_text, engagement_data):
 # -------------------------------
 st.title("EngageFlow: Social Media Networking Dashboard")
 
-query_input = st.text_input("Search Query or @username", "@twitterdev")
-max_results = st.slider("Max Results", 1, 20, 5)  # min 1 for testing
+query_input = st.text_input("Search Query or @username", "@twitterdev -is:retweet")
+max_results = st.slider("Max Results", 10, 100, 10)  # Free tier requires min 10
 
 # Initialize session state for tweets
 if 'tweets' not in st.session_state:
