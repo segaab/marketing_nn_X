@@ -134,7 +134,7 @@ def generate_followup(tweet_text, engagement_data):
 st.title("EngageFlow: Social Media Networking Dashboard")
 
 query_input = st.text_input("Search Query or @username", "@twitterdev")
-max_results = st.slider("Max Results", 5, 20, 10)
+max_results = st.slider("Max Results", 1, 20, 5)
 
 # --- 1️⃣ Fetch Tweets ---
 if st.button("Fetch Tweets"):
