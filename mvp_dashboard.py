@@ -165,7 +165,158 @@ def fetch_metrics(tweet_id: str):
         logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
         return None
     return resp.json().get("data", {}).get("public_metrics", {})
-if __name__ == "__main__":
-         # Any startup logic here, e.g., logging a message
-         logging.info("Starting EngageFlow dashboard...")
-         # The rest of your Streamlit UI code is already top-level, so it will run automatically
+
+# Chunk 2: NLP Helpers and Streamlit UI
+
+# ==============================
+# NLP Helpers
+# ==============================
+def detect_topic(tweet_text: str) -> str:
+    logging.info(f"Detecting topic for tweet: {tweet_text[:50]}...")
+    prompt = f"Classify this tweet into ONE of these topics: {CONCEPTS}. Tweet: {tweet_text}"
+    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    topic = completion.choices[0].message.content.strip()
+    logging.info(f"Response: detected topic='{topic}'")
+    return topic
+
+def generate_comment(tweet_text: str, topic: str) -> str:
+    logging.info(f"Generating comment for topic '{topic}'")
+    prompt = (
+        f"Generate 3 professional comment options for this tweet on topic '{topic}'. "
+        f"Each must be under 280 characters:\n{tweet_text}"
+    )
+    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    comments = completion.choices[0].message.content
+    logging.info(f"Response: generated comments='{comments[:50]}...'")
+    return comments
+
+def generate_followup(tweet_text: str, engagement_data: dict) -> str:
+    desc = "This tweet has "
+    if engagement_data:
+        parts = [
+            f"{engagement_data.get('retweet_count', 0)} retweets",
+            f"{engagement_data.get('reply_count', 0)} replies",
+            f"{engagement_data.get('like_count', 0)} likes",
+            f"{engagement_data.get('impression_count', 0)} impressions",
+        ]
+        desc += ", ".join(parts)
+    else:
+        desc += "no engagement yet"
+
+    prompt = (
+        f"Based on engagement metrics ({desc}), generate a follow-up reply for the tweet: {tweet_text}. "
+        f"Keep it under 280 characters."
+    )
+    logging.info(f"Generating follow-up with desc='{desc}'")
+    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    followup = completion.choices[0].message.content
+    logging.info(f"Response: generated followup='{followup[:50]}...'")
+    return followup
+
+# ==============================
+# Streamlit UI
+# ==============================
+st.title("EngageFlow: Social Media Networking Dashboard")
+
+query_input = st.text_input("Search Query or @username", "@twitterdev")
+
+# --- 1️⃣ Fetch Tweets ---
+if st.button("Fetch Tweets"):
+    with st.spinner("Fetching tweets..."):
+        st.session_state["tweets"] = fetch_tweets(query_input)
+        logging.info("Fetch button clicked")
+
+tweets = st.session_state.get("tweets", [])
+
+if tweets:
+    st.subheader("Fetched Tweets")
+    df = pd.DataFrame(
+        [
+            {"Tweet ID": t["id"], "Text": t["text"], "Topic": t.get("topic", "Not analyzed")}
+            for t in tweets
+        ]
+    )
+    st.dataframe(df)
+
+    # --- 2️⃣ Detect Topics ---
+    if st.button("Detect Topics for All"):
+        for t in tweets:
+            t["topic"] = detect_topic(t["text"])
+        st.success("Topics detected")
+        logging.info("Topic detection complete")
+        df = pd.DataFrame(
+            [
+                {"Tweet ID": t["id"], "Text": t["text"], "Topic": t.get("topic", "Not analyzed")}
+                for t in tweets
+            ]
+        )
+        st.dataframe(df)
+
+    # --- 3️⃣ Select Tweet ---
+    tweet_ids = [t["id"] for t in tweets]
+    sel_id = st.selectbox(
+        "Select Tweet to work on", tweet_ids,
+        format_func=lambda x: next((t["text"][:50] + "..." for t in tweets if t["id"] == x), x),
+    )
+    st.session_state["selected_tweet_id"] = sel_id
+    selected = next((t for t in tweets if t["id"] == sel_id), None)
+
+    if selected:
+        st.markdown(f"**Tweet:** {selected['text']}")
+        if "topic" in selected:
+            st.markdown(f"**Detected Topic:** {selected['topic']}")
+
+        # --- 4️⃣ Generate Comments ---
+        if st.button("Generate Comment Suggestions"):
+            with st.spinner("Generating..."):
+                selected["suggested_comments"] = generate_comment(
+                    selected["text"], selected.get("topic", "General")
+                )
+        if "suggested_comments" in selected:
+            st.subheader("Suggested Comments")
+            st.markdown(selected["suggested_comments"])
+
+        # --- 5️⃣ Metrics ---
+        if st.button("Refresh Metrics"):
+            with st.spinner("Fetching metrics..."):
+                selected["metrics"] = fetch_metrics(sel_id)
+        if "metrics" in selected and selected["metrics"]:
+            st.subheader("Tweet Metrics")
+            cols = st.columns(len(selected["metrics"]))
+            for i, (k, v) in enumerate(selected["metrics"].items()):
+                cols[i].metric(k.replace("_", " ").title(), v)
+
+        # --- 6️⃣ Post Reply ---
+        reply_text = st.text_area("Write Your Reply", "", height=100)
+        if reply_text and len(reply_text) <= 280:
+            if st.button("Post Reply"):
+                with st.spinner("Posting..."):
+                    status, resp = post_reply(reply_text, sel_id)
+                    if status == 201:
+                        st.success("Reply posted successfully!")
+                        st.json(resp)
+                    else:
+                        st.error(f"Error {status}")
+                        st.json(resp)
+
+        # --- 7️⃣ Follow-Up ---
+        if "metrics" in selected and selected["metrics"]:
+            if st.button("Generate Follow-Up"):
+                with st.spinner("Generating follow-up..."):
+                    selected["followup"] = generate_followup(selected["text"], selected["metrics"])
+            if "followup" in selected:
+                st.subheader("Suggested Follow-Up")
+                st.markdown(selected["followup"])
+    
