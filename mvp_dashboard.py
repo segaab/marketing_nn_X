@@ -1,412 +1,284 @@
 # streamlit_dashboard_buttons.py
-import streamlit as st
 import os
-from dotenv import load_dotenv
-import requests
 import json
-import pandas as pd
-import logging
-from huggingface_hub import InferenceClient
-from requests_oauthlib import OAuth2Session
 import time
+import logging
+import requests
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
+from requests_oauthlib import OAuth1Session
+from huggingface_hub import InferenceClient
 
-# -------------------------------
-# Logging Setup
-# -------------------------------
+# ==============================
+# Logging
+# ==============================
+LOG_FILE = "engageflow.log"
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s]: %(message)s',
-    handlers=[logging.FileHandler("engageflow.log"), logging.StreamHandler()]
+    format="%(asctime)s [%(levelname)s]: %(message)s",
+    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()],
 )
 
-# -------------------------------
-# Load environment variables
-# -------------------------------
+# ==============================
+# Load Environment
+# ==============================
 load_dotenv()
-HF_TOKEN = os.getenv("HF_TOKEN")
-CLIENT_ID = os.getenv("TWITTER_OAUTH2_CLIENT_ID")
-CLIENT_SECRET = os.getenv("TWITTER_OAUTH2_CLIENT_SECRET")
-ACCESS_TOKEN = os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN")
-REFRESH_TOKEN = os.getenv("TWITTER_OAUTH2_REFRESH_TOKEN")
-CALLBACK_URI = os.getenv("TWITTER_CALLBACK_URI")
 
-# -------------------------------
-# Initialize HuggingFace client
-# -------------------------------
+ENV_MAP = {
+    "X_BEARER_TOKEN": os.getenv("X_BEARER_TOKEN"),
+    "X_API_KEY": os.getenv("X_API_KEY"),
+    "X_API_SECRET": os.getenv("X_API_SECRET"),
+    "X_ACCESS_TOKEN": os.getenv("X_ACCESS_TOKEN"),
+    "X_ACCESS_SECRET": os.getenv("X_ACCESS_SECRET"),
+    "X_CLIENT_ID": os.getenv("X_CLIENT_ID"),
+    "X_CLIENT_SECRET": os.getenv("X_CLIENT_SECRET"),
+}
+
+HF_TOKEN = os.getenv("HF_TOKEN")
 hf_client = InferenceClient(provider="hf-inference", api_key=HF_TOKEN)
 
-# -------------------------------
-# NLP Model & Concepts
-# -------------------------------
-nlp_model = "HuggingFaceTB/SmolLM3-3B"
-concepts = ["investment", "crypto", "commodities", "forex", "market analysis"]
+NLP_MODEL = "HuggingFaceTB/SmolLM3-3B"
+CONCEPTS = ["investment", "crypto", "commodities", "forex", "market analysis"]
 
-# -------------------------------
-# OAuth2 Token Management
-# -------------------------------
-def refresh_oauth2_token(client_id, client_secret, refresh_token):
-    """Refresh OAuth2 access token using refresh token"""
-    logging.info("Refreshing OAuth2 token")
-    token_url = "https://api.twitter.com/2/oauth2/token"
-    
-    data = {
-        'client_id': client_id,
-        'client_secret': client_secret,
-        'grant_type': 'refresh_token',
-        'refresh_token': refresh_token
-    }
-    
-    response = requests.post(token_url, data=data)
-    
-    if response.status_code == 200:
-        tokens = response.json()
-        logging.info("OAuth2 token refreshed successfully")
-        
-        # Update environment variables
-        os.environ["TWITTER_OAUTH2_ACCESS_TOKEN"] = tokens['access_token']
-        if 'refresh_token' in tokens:
-            os.environ["TWITTER_OAUTH2_REFRESH_TOKEN"] = tokens['refresh_token']
-            
-        return tokens['access_token'], tokens.get('refresh_token', refresh_token)
-    else:
-        logging.error(f"Failed to refresh token: {response.status_code} {response.text}")
-        st.error("Failed to refresh authentication token. Please check your credentials.")
-        return None, None
+# ==============================
+# Session State
+# ==============================
+def _seed_session_from_env():
+    for k, v in ENV_MAP.items():
+        st.session_state.setdefault(k.lower(), v)
+    st.session_state.setdefault("tweets", [])
+    st.session_state.setdefault("selected_tweet_id", None)
 
-def get_auth_session():
-    """Get an authenticated OAuth2 session"""
-    access_token = os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN")
-    refresh_token = os.environ.get("TWITTER_OAUTH2_REFRESH_TOKEN")
-    
-    if not access_token or not refresh_token:
-        st.error("OAuth2 tokens not found. Please set up authentication first.")
+_seed_session_from_env()
+
+# ==============================
+# Auth Helpers
+# ==============================
+def bearer_headers():
+    token = st.session_state.get("x_bearer_token")
+    if not token:
+        st.error("Missing Bearer Token in .env")
         return None
-    
-    # Check if token needs refreshing by making a test request
-    auth_headers = {"Authorization": f"Bearer {access_token}"}
-    test_response = requests.get("https://api.twitter.com/2/users/me", headers=auth_headers)
-    
-    if test_response.status_code == 401:
-        # Token expired, refresh it
-        new_access_token, new_refresh_token = refresh_oauth2_token(CLIENT_ID, CLIENT_SECRET, refresh_token)
-        if not new_access_token:
-            return None
-        access_token = new_access_token
-        
-    return access_token
+    return {"Authorization": f"Bearer {token}"}
 
-# -------------------------------
-# Helper Functions
-# -------------------------------
-def fetch_tweets(query):
-    """Fetch tweets based on search query"""
-    max_results = 15
-    logging.info(f"Fetching {max_results} tweets for query: '{query}'")
-    
-    access_token = get_auth_session()
-    if not access_token:
-        return []
-    
+def oauth1_session():
+    api_key = st.session_state.get("x_api_key")
+    api_secret = st.session_state.get("x_api_secret")
+    access_token = st.session_state.get("x_access_token")
+    access_secret = st.session_state.get("x_access_secret")
+
+    if not all([api_key, api_secret, access_token, access_secret]):
+        st.error("Missing OAuth1.0a credentials in .env")
+        return None
+
+    return OAuth1Session(
+        client_key=api_key,
+        client_secret=api_secret,
+        resource_owner_key=access_token,
+        resource_owner_secret=access_secret,
+    )
+
+# ==============================
+# API Functions
+# ==============================
+def fetch_tweets(query: str):
     url = "https://api.twitter.com/2/tweets/search/recent"
-    headers = {"Authorization": f"Bearer {access_token}"}
+    headers = bearer_headers()
+    if headers is None:
+        return []
+
     params = {
         "query": query,
-        "max_results": max_results,
-        "tweet.fields": "author_id,created_at,public_metrics,text"
+        "max_results": 15,
+        "tweet.fields": "author_id,created_at,public_metrics,text",
     }
-    
-    response = requests.get(url, headers=headers, params=params)
-    
-    if response.status_code != 200:
-        logging.error(f"Error fetching tweets: {response.status_code} {response.text}")
-        st.error(f"Error fetching tweets: {response.status_code}")
-        return []
-    
-    tweets = response.json().get("data", [])
-    logging.info(f"Fetched {len(tweets)} tweets")
-    return tweets
 
-def detect_topic(tweet_text):
-    """Detect the topic of a tweet using the NLP model"""
+    logging.info(f"Fetching tweets for query='{query}'")
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        logging.error(f"Fetch error {resp.status_code}: {resp.text}")
+        st.error(f"Error fetching tweets: {resp.status_code}")
+        return []
+
+    data = resp.json().get("data", [])
+    logging.info(f"Fetched {len(data)} tweets")
+    return data
+
+def post_reply(text: str, tweet_id: str):
+    sess = oauth1_session()
+    if not sess:
+        return 401, {"error": "OAuth1 session not available"}
+
+    url = "https://api.twitter.com/2/tweets"
+    payload = {"text": text, "reply": {"in_reply_to_tweet_id": tweet_id}}
+    resp = sess.post(url, json=payload, timeout=30)
+
+    if resp.status_code != 201:
+        logging.error(f"Post reply failed {resp.status_code}: {resp.text}")
+    else:
+        logging.info("Reply posted successfully")
+
+    try:
+        return resp.status_code, resp.json()
+    except Exception:
+        return resp.status_code, {"raw": resp.text}
+
+def fetch_metrics(tweet_id: str):
+    url = f"https://api.twitter.com/2/tweets/{tweet_id}"
+    headers = bearer_headers()
+    if headers is None:
+        return None
+
+    params = {"tweet.fields": "public_metrics"}
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+    if resp.status_code != 200:
+        logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
+        return None
+    return resp.json().get("data", {}).get("public_metrics", {})
+
+# ==============================
+# NLP Helpers
+# ==============================
+def detect_topic(tweet_text: str) -> str:
     logging.info(f"Detecting topic for tweet: {tweet_text[:50]}...")
-    prompt = f"Classify this tweet into ONE of these topics: {concepts}. Tweet: {tweet_text}"
+    prompt = f"Classify this tweet into ONE of these topics: {CONCEPTS}. Tweet: {tweet_text}"
     completion = hf_client.chat.completions.create(
-        model=nlp_model, 
-        messages=[{"role": "user", "content": prompt}]
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
     )
     topic = completion.choices[0].message.content.strip()
     logging.info(f"Detected topic: {topic}")
     return topic
 
-def generate_comment(tweet_text, topic):
-    """Generate comment suggestions for a tweet"""
+def generate_comment(tweet_text: str, topic: str) -> str:
     logging.info(f"Generating comment for topic '{topic}'")
-    prompt = f"Generate 3 professional comment options for this tweet based on topic '{topic}'. Each comment should be concise (max 280 chars) and engaging: {tweet_text}"
+    prompt = (
+        f"Generate 3 professional comment options for this tweet on topic '{topic}'. "
+        f"Each must be under 280 characters:\n{tweet_text}"
+    )
     completion = hf_client.chat.completions.create(
-        model=nlp_model, 
-        messages=[{"role": "user", "content": prompt}]
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
     )
     comments = completion.choices[0].message.content
     logging.info(f"Generated comments: {comments[:50]}...")
     return comments
 
-def post_reply(text, tweet_id):
-    """Post a reply to a tweet"""
-    logging.info(f"Posting reply to tweet_id={tweet_id}")
-    
-    access_token = get_auth_session()
-    if not access_token:
-        return 401, {"error": "Authentication failed"}
-    
-    url = "https://api.twitter.com/2/tweets"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "text": text,
-        "reply": {"in_reply_to_tweet_id": tweet_id}
-    }
-    
-    response = requests.post(url, headers=headers, json=payload)
-    
-    if response.status_code == 201:
-        logging.info(f"Reply posted successfully to tweet_id={tweet_id}")
-        return response.status_code, response.json()
-    else:
-        logging.error(f"Failed to post reply: {response.status_code} {response.text}")
-        return response.status_code, response.json() if response.text else {"error": "Unknown error"}
-
-def fetch_metrics(tweet_id):
-    """Fetch the metrics for a tweet"""
-    logging.info(f"Fetching metrics for tweet_id={tweet_id}")
-    
-    access_token = get_auth_session()
-    if not access_token:
-        return None
-    
-    url = f"https://api.twitter.com/2/tweets/{tweet_id}?tweet.fields=public_metrics"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    
-    response = requests.get(url, headers=headers)
-    
-    if response.status_code != 200:
-        logging.error(f"Error fetching metrics for tweet_id={tweet_id}: {response.status_code}")
-        return None
-    
-    metrics = response.json().get("data", {}).get("public_metrics", {})
-    logging.info(f"Metrics: {metrics}")
-    return metrics
-
-def generate_followup(tweet_text, engagement_data):
-    """Generate a follow-up reply based on engagement data"""
-    logging.info(f"Generating follow-up for tweet based on engagement {engagement_data}")
-    
-    # Create a user-friendly description of the engagement
-    engagement_desc = "This tweet has "
+def generate_followup(tweet_text: str, engagement_data: dict) -> str:
+    desc = "This tweet has "
     if engagement_data:
-        if "retweet_count" in engagement_data:
-            engagement_desc += f"{engagement_data['retweet_count']} retweets, "
-        if "reply_count" in engagement_data:
-            engagement_desc += f"{engagement_data['reply_count']} replies, "
-        if "like_count" in engagement_data:
-            engagement_desc += f"{engagement_data['like_count']} likes, "
-        if "impression_count" in engagement_data:
-            engagement_desc += f"{engagement_data['impression_count']} impressions, "
-        engagement_desc = engagement_desc.rstrip(", ")
+        parts = [
+            f"{engagement_data.get('retweet_count', 0)} retweets",
+            f"{engagement_data.get('reply_count', 0)} replies",
+            f"{engagement_data.get('like_count', 0)} likes",
+            f"{engagement_data.get('impression_count', 0)} impressions",
+        ]
+        desc += ", ".join(parts)
     else:
-        engagement_desc += "no engagement yet."
-    
-    prompt = f"Based on engagement metrics ({engagement_desc}), generate a follow-up reply for the tweet: {tweet_text}. Keep it under 280 characters and make it engaging."
-    
-    completion = hf_client.chat.completions.create(
-        model=nlp_model, 
-        messages=[{"role": "user", "content": prompt}]
+        desc += "no engagement yet"
+
+    prompt = (
+        f"Based on engagement metrics ({desc}), generate a follow-up reply for the tweet: {tweet_text}. "
+        f"Keep it under 280 characters."
     )
-    followup = completion.choices[0].message.content
-    logging.info(f"Follow-up: {followup[:50]}...")
-    return followup
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return completion.choices[0].message.content
 
-# -------------------------------
-# Authentication Setup UI
-# -------------------------------
-def setup_auth_ui():
-    """UI for setting up OAuth2 authentication"""
-    st.subheader("Authentication Setup")
-    
-    with st.form("oauth_setup"):
-        client_id = st.text_input("Client ID", value=os.environ.get("TWITTER_OAUTH2_CLIENT_ID", ""))
-        client_secret = st.text_input("Client Secret", type="password", value=os.environ.get("TWITTER_OAUTH2_CLIENT_SECRET", ""))
-        access_token = st.text_input("Access Token", value=os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN", ""))
-        refresh_token = st.text_input("Refresh Token", value=os.environ.get("TWITTER_OAUTH2_REFRESH_TOKEN", ""))
-        callback_uri = st.text_input("Callback URI", value=os.environ.get("TWITTER_CALLBACK_URI", ""))
-        
-        submitted = st.form_submit_button("Save Credentials")
-        
-        if submitted:
-            os.environ["TWITTER_OAUTH2_CLIENT_ID"] = client_id
-            os.environ["TWITTER_OAUTH2_CLIENT_SECRET"] = client_secret
-            os.environ["TWITTER_OAUTH2_ACCESS_TOKEN"] = access_token
-            os.environ["TWITTER_OAUTH2_REFRESH_TOKEN"] = refresh_token
-            os.environ["TWITTER_CALLBACK_URI"] = callback_uri
-            
-            st.success("Credentials saved!")
-            
-            # Test the credentials
-            test_access_token = get_auth_session()
-            if test_access_token:
-                st.success("Authentication successful!")
-            else:
-                st.error("Authentication failed. Please check your credentials.")
-
-# -------------------------------
+# ==============================
 # Streamlit UI
-# -------------------------------
+# ==============================
 st.title("EngageFlow: Social Media Networking Dashboard")
 
-# Add a sidebar with tabs
-tab_options = ["Tweet Engagement", "Authentication Setup"]
-selected_tab = st.sidebar.radio("Navigation", tab_options)
+query_input = st.text_input("Search Query or @username", "@twitterdev")
 
-if selected_tab == "Authentication Setup":
-    setup_auth_ui()
-else:
-    # Main tweet engagement workflow
-    query_input = st.text_input("Search Query or @username", "@twitterdev")
+# --- 1️⃣ Fetch Tweets ---
+if st.button("Fetch Tweets"):
+    with st.spinner("Fetching tweets..."):
+        st.session_state["tweets"] = fetch_tweets(query_input)
+        logging.info("Fetch button clicked")
 
-    # Initialize session state variables if they don't exist
-    if 'tweets' not in st.session_state:
-        st.session_state['tweets'] = []
-    if 'selected_tweet_id' not in st.session_state:
-        st.session_state['selected_tweet_id'] = None
+tweets = st.session_state.get("tweets", [])
 
-    # --- 1️⃣ Fetch Tweets ---
-    if st.button("Fetch Tweets"):
-        with st.spinner("Fetching tweets..."):
-            st.session_state['tweets'] = fetch_tweets(query_input)
-            logging.info("Fetch Tweets button clicked")
+if tweets:
+    st.subheader("Fetched Tweets")
+    df = pd.DataFrame(
+        [
+            {"Tweet ID": t["id"], "Text": t["text"], "Topic": t.get("topic", "Not analyzed")}
+            for t in tweets
+        ]
+    )
+    st.dataframe(df)
 
-    tweets = st.session_state.get('tweets', [])
-
-    if tweets:
-        st.subheader("Fetched Tweets")
-        
-        # Create a more visually appealing dataframe
-        df = pd.DataFrame([{
-            "Tweet ID": t['id'], 
-            "Text": t['text'], 
-            "Topic": t.get('topic', 'Not analyzed')
-        } for t in tweets])
-        
+    # --- 2️⃣ Detect Topics ---
+    if st.button("Detect Topics for All"):
+        for t in tweets:
+            t["topic"] = detect_topic(t["text"])
+        st.success("Topics detected")
+        logging.info("Topic detection complete")
+        df = pd.DataFrame(
+            [
+                {"Tweet ID": t["id"], "Text": t["text"], "Topic": t.get("topic", "Not analyzed")}
+                for t in tweets
+            ]
+        )
         st.dataframe(df)
 
-        # --- 2️⃣ Detect Topic ---
-        if st.button("Detect Topics for All Tweets"):
-            progress_bar = st.progress(0)
-            for i, t in enumerate(tweets):
-                with st.spinner(f"Analyzing tweet {i+1}/{len(tweets)}..."):
-                    t['topic'] = detect_topic(t['text'])
-                    progress_bar.progress((i + 1) / len(tweets))
-            
-            logging.info("Detect Topic button clicked")
-            st.success("Topics detected for all tweets")
-            
-            # Update the dataframe
-            df = pd.DataFrame([{
-                "Tweet ID": t['id'], 
-                "Text": t['text'], 
-                "Topic": t.get('topic', 'Not analyzed')
-            } for t in tweets])
-            
-            st.dataframe(df)
+    # --- 3️⃣ Select Tweet ---
+    tweet_ids = [t["id"] for t in tweets]
+    sel_id = st.selectbox(
+        "Select Tweet to work on", tweet_ids,
+        format_func=lambda x: next((t["text"][:50] + "..." for t in tweets if t["id"] == x), x),
+    )
+    st.session_state["selected_tweet_id"] = sel_id
+    selected = next((t for t in tweets if t["id"] == sel_id), None)
 
-        # --- 3️⃣ Generate Comment ---
-        st.subheader("Generate and Post Comments")
-        
-        tweet_ids = [t['id'] for t in tweets]
-        selected_tweet_id = st.selectbox(
-            "Select Tweet to Comment", 
-            tweet_ids,
-            format_func=lambda x: next((t['text'][:50] + "..." for t in tweets if t['id'] == x), x)
-        )
-        
-        st.session_state['selected_tweet_id'] = selected_tweet_id
-        selected_tweet = next((t for t in tweets if t['id'] == selected_tweet_id), None)
+    if selected:
+        st.markdown(f"**Tweet:** {selected['text']}")
+        if "topic" in selected:
+            st.markdown(f"**Detected Topic:** {selected['topic']}")
 
-        if selected_tweet:
-            st.markdown(f"**Selected Tweet:**  \n{selected_tweet['text']}")
-            
-            # Show the topic if available
-            if 'topic' in selected_tweet:
-                st.markdown(f"**Detected Topic:** {selected_tweet['topic']}")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("Generate Comment Suggestions"):
-                    with st.spinner("Generating comments..."):
-                        topic = selected_tweet.get('topic', 'General')
-                        selected_tweet['suggested_comments'] = generate_comment(selected_tweet['text'], topic)
-                        logging.info(f"Generate Comment button clicked for tweet_id={selected_tweet_id}")
-            
-            with col2:
-                if st.button("Refresh Metrics"):
-                    with st.spinner("Fetching metrics..."):
-                        metrics = fetch_metrics(selected_tweet_id)
-                        selected_tweet['metrics'] = metrics
-                        logging.info(f"Refresh Metrics button clicked for tweet_id={selected_tweet_id}")
-            
-            # Display suggested comments if available
-            if 'suggested_comments' in selected_tweet:
-                st.subheader("Suggested Comments")
-                st.markdown(selected_tweet['suggested_comments'])
-            
-            # Display metrics if available
-            if 'metrics' in selected_tweet and selected_tweet['metrics']:
-                st.subheader("Tweet Metrics")
-                metrics = selected_tweet['metrics']
-                cols = st.columns(len(metrics))
-                for i, (metric, value) in enumerate(metrics.items()):
-                    cols[i].metric(metric.replace('_', ' ').title(), value)
-            
-            # --- 4️⃣ Post Reply ---
-            st.subheader("Post Your Reply")
-            reply_text = st.text_area(
-                "Edit / Write Your Comment Here", 
-                height=100,
-                value=selected_tweet.get('selected_comment', '')
-            )
-            
-            if reply_text:
-                char_count = len(reply_text)
-                st.caption(f"Character count: {char_count}/280")
-                
-                if char_count > 280:
-                    st.warning("Your reply exceeds the 280 character limit!")
-            
-            if st.button("Post Reply", disabled=not reply_text or len(reply_text) > 280):
-                with st.spinner("Posting reply..."):
-                    status, response = post_reply(reply_text, selected_tweet_id)
+        # --- 4️⃣ Generate Comments ---
+        if st.button("Generate Comment Suggestions"):
+            with st.spinner("Generating..."):
+                selected["suggested_comments"] = generate_comment(
+                    selected["text"], selected.get("topic", "General")
+                )
+        if "suggested_comments" in selected:
+            st.subheader("Suggested Comments")
+            st.markdown(selected["suggested_comments"])
+
+        # --- 5️⃣ Metrics ---
+        if st.button("Refresh Metrics"):
+            with st.spinner("Fetching metrics..."):
+                selected["metrics"] = fetch_metrics(sel_id)
+        if "metrics" in selected and selected["metrics"]:
+            st.subheader("Tweet Metrics")
+            cols = st.columns(len(selected["metrics"]))
+            for i, (k, v) in enumerate(selected["metrics"].items()):
+                cols[i].metric(k.replace("_", " ").title(), v)
+
+        # --- 6️⃣ Post Reply ---
+        reply_text = st.text_area("Write Your Reply", "", height=100)
+        if reply_text and len(reply_text) <= 280:
+            if st.button("Post Reply"):
+                with st.spinner("Posting..."):
+                    status, resp = post_reply(reply_text, sel_id)
                     if status == 201:
                         st.success("Reply posted successfully!")
-                        st.json(response)
+                        st.json(resp)
                     else:
-                        st.error(f"Error posting reply: {status}")
-                        st.json(response)
+                        st.error(f"Error {status}")
+                        st.json(resp)
 
-            # --- 6️⃣ Generate Follow-Up ---
-            if 'metrics' in selected_tweet and selected_tweet['metrics']:
-                if st.button("Generate Follow-Up Comment"):
-                    with st.spinner("Generating follow-up..."):
-                        followup_text = generate_followup(selected_tweet['text'], selected_tweet['metrics'])
-                        selected_tweet['followup_text'] = followup_text
-                        logging.info(f"Generate Follow-Up button clicked for tweet_id={selected_tweet_id}")
-                
-                if 'followup_text' in selected_tweet:
-                    st.subheader("Suggested Follow-Up")
-                    st.markdown(selected_tweet['followup_text'])
-                    
-                    if st.button("Use This Follow-Up"):
-                        selected_tweet['selected_comment'] = selected_tweet['followup_text']
-                        st.experimental_rerun()
+        # --- 7️⃣ Follow-Up ---
+        if "metrics" in selected and selected["metrics"]:
+            if st.button("Generate Follow-Up"):
+                with st.spinner("Generating follow-up..."):
+                    selected["followup"] = generate_followup(selected["text"], selected["metrics"])
+            if "followup" in selected:
+                st.subheader("Suggested Follow-Up")
+                st.markdown(selected["followup"])
