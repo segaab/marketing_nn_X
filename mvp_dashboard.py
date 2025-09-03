@@ -90,12 +90,19 @@ def fetch_tweets(query: str):
 
     params = {
         "query": query,
-        "max_results": 15,
+        "max_results": 15,  # fixed to 15
         "tweet.fields": "author_id,created_at,public_metrics,text",
     }
 
     logging.info(f"Fetching tweets for query='{query}'")
     resp = requests.get(url, headers=headers, params=params, timeout=30)
+
+    # Debugging rate limit headers
+    logging.info(
+        f"Rate limits → Remaining: {resp.headers.get('x-rate-limit-remaining')} "
+        f"Reset: {resp.headers.get('x-rate-limit-reset')}"
+    )
+
     if resp.status_code != 200:
         logging.error(f"Fetch error {resp.status_code}: {resp.text}")
         st.error(f"Error fetching tweets: {resp.status_code}")
@@ -105,6 +112,9 @@ def fetch_tweets(query: str):
     logging.info(f"Fetched {len(data)} tweets")
     return data
 
+# ==============================
+# Post & Metrics Functions
+# ==============================
 def post_reply(text: str, tweet_id: str):
     sess = oauth1_session()
     if not sess:
@@ -132,6 +142,12 @@ def fetch_metrics(tweet_id: str):
 
     params = {"tweet.fields": "public_metrics"}
     resp = requests.get(url, headers=headers, params=params, timeout=30)
+
+    logging.info(
+        f"Rate limits (metrics) → Remaining: {resp.headers.get('x-rate-limit-remaining')} "
+        f"Reset: {resp.headers.get('x-rate-limit-reset')}"
+    )
+
     if resp.status_code != 200:
         logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
         return None
