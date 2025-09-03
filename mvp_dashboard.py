@@ -84,14 +84,15 @@ def oauth1_session():
 # ==============================
 def fetch_latest_tweet_ids(username: str, count=5):
     """
-    Fetch the latest tweet IDs for a username.
+    Fetch the latest tweet IDs for a username using recent search endpoint.
     """
     url = "https://api.twitter.com/2/tweets/search/recent"
     headers = bearer_headers()
     if headers is None:
         return []
 
-    params = {"query": f"from:{username}", "max_results": count, "tweet.fields": "id"}
+    # max_results must be 10–100 for recent search
+    params = {"query": f"from:{username}", "max_results": 10}
     resp = requests.get(url, headers=headers, params=params, timeout=30)
 
     logging.info(
@@ -105,7 +106,9 @@ def fetch_latest_tweet_ids(username: str, count=5):
         return []
 
     data = resp.json().get("data", [])
-    return [t["id"] for t in data]
+    # Return only the latest `count` IDs
+    return [t["id"] for t in data[:count]]
+
 
 def lookup_tweets_by_ids(tweet_ids):
     """
@@ -138,6 +141,98 @@ def lookup_tweets_by_ids(tweet_ids):
         return []
 
     return resp.json().get("data", [])
+
+# ==============================
+# NLP Helpers
+# ==============================
+def detect_topic(tweet_text: str) -> str:
+    logging.info(f"Detecting topic for tweet: {tweet_text[:50]}...")
+    prompt = f"Classify this tweet into ONE of these topics: {CONCEPTS}. Tweet: {tweet_text}"
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    topic = completion.choices[0].message.content.strip()
+    logging.info(f"Detected topic: {topic}")
+    return topic
+
+def generate_comment(tweet_text: str, topic: str) -> str:
+    logging.info(f"Generating comment for topic '{topic}'")
+    prompt = (
+        f"Generate 3 professional comment options for this tweet on topic '{topic}'. "
+        f"Each must be under 280 characters:\n{tweet_text}"
+    )
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    comments = completion.choices[0].message.content
+    logging.info(f"Generated comments: {comments[:50]}...")
+    return comments
+
+def generate_followup(tweet_text: str, engagement_data: dict) -> str:
+    desc = "This tweet has "
+    if engagement_data:
+        parts = [
+            f"{engagement_data.get('retweet_count', 0)} retweets",
+            f"{engagement_data.get('reply_count', 0)} replies",
+            f"{engagement_data.get('like_count', 0)} likes",
+            f"{engagement_data.get('impression_count', 0)} impressions",
+        ]
+        desc += ", ".join(parts)
+    else:
+        desc += "no engagement yet"
+
+    prompt = (
+        f"Based on engagement metrics ({desc}), generate a follow-up reply for the tweet: {tweet_text}. "
+        f"Keep it under 280 characters."
+    )
+    completion = hf_client.chat.completions.create(
+        model=NLP_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return completion.choices[0].message.content
+
+# ==============================
+# Post & Metrics Functions
+# ==============================
+def post_reply(text: str, tweet_id: str):
+    sess = oauth1_session()
+    if not sess:
+        return 401, {"error": "OAuth1 session not available"}
+
+    url = "https://api.twitter.com/2/tweets"
+    payload = {"text": text, "reply": {"in_reply_to_tweet_id": tweet_id}}
+    resp = sess.post(url, json=payload, timeout=30)
+
+    if resp.status_code != 201:
+        logging.error(f"Post reply failed {resp.status_code}: {resp.text}")
+    else:
+        logging.info("Reply posted successfully")
+
+    try:
+        return resp.status_code, resp.json()
+    except Exception:
+        return resp.status_code, {"raw": resp.text}
+
+def fetch_metrics(tweet_id: str):
+    url = f"https://api.twitter.com/2/tweets/{tweet_id}"
+    headers = bearer_headers()
+    if headers is None:
+        return None
+
+    params = {"tweet.fields": "public_metrics"}
+    resp = requests.get(url, headers=headers, params=params, timeout=30)
+
+    logging.info(
+        f"Rate limits (metrics) → Remaining: {resp.headers.get('x-rate-limit-remaining')} "
+        f"Reset: {resp.headers.get('x-rate-limit-reset')}"
+    )
+
+    if resp.status_code != 200:
+        logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
+        return None
+    return resp.json().get("data", {}).get("public_metrics", {})
 
 # ==============================
 # Streamlit UI
