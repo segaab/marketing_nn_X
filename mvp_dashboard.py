@@ -165,3 +165,7 @@ def fetch_metrics(tweet_id: str):
         logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
         return None
     return resp.json().get("data", {}).get("public_metrics", {})
+if __name__ == "__main__":
+         # Any startup logic here, e.g., logging a message
+         logging.info("Starting EngageFlow dashboard...")
+         # The rest of your Streamlit UI code is already top-level, so it will run automatically
