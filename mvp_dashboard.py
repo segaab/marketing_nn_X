@@ -1,5 +1,4 @@
-# Chunk 1: Imports, Logging, Environment, Session State, Auth Helpers, API Functions, Post & Metrics Functions
-
+# streamlit_dashboard_buttons.py
 import os
 import json
 import time
@@ -83,160 +82,76 @@ def oauth1_session():
 # ==============================
 # API Functions
 # ==============================
-def fetch_tweets(query: str):
+def fetch_latest_tweet_ids(username: str, count=5):
+    """
+    Fetch the latest tweet IDs for a username.
+    """
     url = "https://api.twitter.com/2/tweets/search/recent"
     headers = bearer_headers()
     if headers is None:
         return []
 
-    params = {
-        "query": query,
-        "max_results": 15,  # fixed to 15
-        "tweet.fields": "author_id,created_at,public_metrics,text",
-    }
-
-    logging.info(f"Fetching tweets for query='{query}'")
-    logging.info(f"Request: GET {url} with params={json.dumps(params)} headers={headers}")
+    params = {"query": f"from:{username}", "max_results": count, "tweet.fields": "id"}
     resp = requests.get(url, headers=headers, params=params, timeout=30)
 
-    logging.info(f"Response: status={resp.status_code}, reason={resp.reason}")
-    logging.info(f"Rate limits → Remaining: {resp.headers.get('x-rate-limit-remaining')} Reset: {resp.headers.get('x-rate-limit-reset')}")
-
-    if resp.status_code == 200:
-        logging.info(f"Response body summary: {len(resp.json().get('data', []))} tweets fetched")
-    else:
-        logging.error(f"Response body: {resp.text}")
+    logging.info(
+        f"Rate limits (ID fetch) → Remaining: {resp.headers.get('x-rate-limit-remaining')} "
+        f"Reset: {resp.headers.get('x-rate-limit-reset')}"
+    )
 
     if resp.status_code != 200:
-        st.error(f"Error fetching tweets: {resp.status_code}")
+        logging.error(f"Fetch IDs error {resp.status_code}: {resp.text}")
+        st.error(f"Error fetching tweet IDs: {resp.status_code}")
         return []
 
     data = resp.json().get("data", [])
-    logging.info(f"Fetched {len(data)} tweets")
-    return data
+    return [t["id"] for t in data]
 
-# ==============================
-# Post & Metrics Functions
-# ==============================
-def post_reply(text: str, tweet_id: str):
-    sess = oauth1_session()
-    if not sess:
-        return 401, {"error": "OAuth1 session not available"}
+def lookup_tweets_by_ids(tweet_ids):
+    """
+    Lookup tweets with details using Tweet Lookup endpoint.
+    """
+    if not tweet_ids:
+        return []
 
     url = "https://api.twitter.com/2/tweets"
-    payload = {"text": text, "reply": {"in_reply_to_tweet_id": tweet_id}}
-
-    logging.info(f"Posting reply to {url} with payload={json.dumps(payload)}")
-    resp = sess.post(url, json=payload, timeout=30)
-
-    logging.info(f"Response: status={resp.status_code}, reason={resp.reason}")
-    if resp.status_code != 201:
-        logging.error(f"Post reply failed: {resp.text}")
-    else:
-        logging.info(f"Response body: {resp.text}")
-        logging.info("Reply posted successfully")
-
-    try:
-        return resp.status_code, resp.json()
-    except Exception:
-        return resp.status_code, {"raw": resp.text}
-
-def fetch_metrics(tweet_id: str):
-    url = f"https://api.twitter.com/2/tweets/{tweet_id}"
     headers = bearer_headers()
-    if headers is None:
-        return None
+    ids_param = ",".join(tweet_ids)
 
-    params = {"tweet.fields": "public_metrics"}
+    params = {
+        "ids": ids_param,
+        "tweet.fields": "author_id,created_at,public_metrics,text",
+        "expansions": "author_id",
+        "user.fields": "created_at,username,name",
+    }
 
-    logging.info(f"Fetching metrics for tweet_id={tweet_id}")
-    logging.info(f"Request: GET {url} with params={json.dumps(params)} headers={headers}")
     resp = requests.get(url, headers=headers, params=params, timeout=30)
 
-    logging.info(f"Response: status={resp.status_code}, reason={resp.reason}")
-    logging.info(f"Rate limits (metrics) → Remaining: {resp.headers.get('x-rate-limit-remaining')} Reset: {resp.headers.get('x-rate-limit-reset')}")
-
-    if resp.status_code == 200:
-        logging.info(f"Response body: {json.dumps(resp.json(), indent=2)}")
-    else:
-        logging.error(f"Response body: {resp.text}")
+    logging.info(
+        f"Rate limits (lookup) → Remaining: {resp.headers.get('x-rate-limit-remaining')} "
+        f"Reset: {resp.headers.get('x-rate-limit-reset')}"
+    )
 
     if resp.status_code != 200:
-        logging.error(f"Metrics fetch failed {resp.status_code}: {resp.text}")
-        return None
-    return resp.json().get("data", {}).get("public_metrics", {})
+        logging.error(f"Lookup error {resp.status_code}: {resp.text}")
+        st.error(f"Error fetching tweets: {resp.status_code}")
+        return []
 
-# Chunk 2: NLP Helpers and Streamlit UI
-
-# ==============================
-# NLP Helpers
-# ==============================
-def detect_topic(tweet_text: str) -> str:
-    logging.info(f"Detecting topic for tweet: {tweet_text[:50]}...")
-    prompt = f"Classify this tweet into ONE of these topics: {CONCEPTS}. Tweet: {tweet_text}"
-    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
-    completion = hf_client.chat.completions.create(
-        model=NLP_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    topic = completion.choices[0].message.content.strip()
-    logging.info(f"Response: detected topic='{topic}'")
-    return topic
-
-def generate_comment(tweet_text: str, topic: str) -> str:
-    logging.info(f"Generating comment for topic '{topic}'")
-    prompt = (
-        f"Generate 3 professional comment options for this tweet on topic '{topic}'. "
-        f"Each must be under 280 characters:\n{tweet_text}"
-    )
-    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
-    completion = hf_client.chat.completions.create(
-        model=NLP_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    comments = completion.choices[0].message.content
-    logging.info(f"Response: generated comments='{comments[:50]}...'")
-    return comments
-
-def generate_followup(tweet_text: str, engagement_data: dict) -> str:
-    desc = "This tweet has "
-    if engagement_data:
-        parts = [
-            f"{engagement_data.get('retweet_count', 0)} retweets",
-            f"{engagement_data.get('reply_count', 0)} replies",
-            f"{engagement_data.get('like_count', 0)} likes",
-            f"{engagement_data.get('impression_count', 0)} impressions",
-        ]
-        desc += ", ".join(parts)
-    else:
-        desc += "no engagement yet"
-
-    prompt = (
-        f"Based on engagement metrics ({desc}), generate a follow-up reply for the tweet: {tweet_text}. "
-        f"Keep it under 280 characters."
-    )
-    logging.info(f"Generating follow-up with desc='{desc}'")
-    logging.info(f"HuggingFace request: model={NLP_MODEL}, prompt='{prompt[:100]}...'")
-    completion = hf_client.chat.completions.create(
-        model=NLP_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    followup = completion.choices[0].message.content
-    logging.info(f"Response: generated followup='{followup[:50]}...'")
-    return followup
+    return resp.json().get("data", [])
 
 # ==============================
 # Streamlit UI
 # ==============================
 st.title("EngageFlow: Social Media Networking Dashboard")
 
-query_input = st.text_input("Search Query or @username", "@twitterdev")
+username_input = st.text_input("Enter Username", "twitterdev")
 
 # --- 1️⃣ Fetch Tweets ---
 if st.button("Fetch Tweets"):
     with st.spinner("Fetching tweets..."):
-        st.session_state["tweets"] = fetch_tweets(query_input)
-        logging.info("Fetch button clicked")
+        tweet_ids = fetch_latest_tweet_ids(username_input, count=5)
+        st.session_state["tweets"] = lookup_tweets_by_ids(tweet_ids)
+        logging.info(f"Fetched {len(st.session_state['tweets'])} tweets")
 
 tweets = st.session_state.get("tweets", [])
 
@@ -319,4 +234,3 @@ if tweets:
             if "followup" in selected:
                 st.subheader("Suggested Follow-Up")
                 st.markdown(selected["followup"])
-    
